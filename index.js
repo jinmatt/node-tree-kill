@@ -29,10 +29,8 @@ module.exports = function (pid, signal, callback) {
         exec('taskkill /pid ' + pid + ' /T /F', callback);
         break;
     case 'darwin':
-        buildProcessTree(pid, tree, pidsToProcess, function (parentPid) {
-          return spawn('pgrep', ['-P', parentPid]);
-        }, function () {
-            killAll(tree, signal, callback);
+        buildProcessTreeMacOS(pid, tree, pidsToProcess, function () {
+          killAll(tree, signal, callback);
         });
         break;
     // case 'sunos':
@@ -115,4 +113,47 @@ function buildProcessTree (parentPid, tree, pidsToProcess, spawnChildProcessesLi
     };
 
     ps.on('close', onClose);
+}
+
+function buildProcessTreeMacOS(parentPid, tree, pidsToProcess, cb) {
+    try {
+        let stdout = '';
+        try {
+            stdout = execSync('pgrep -P ' + parentPid, {
+                encoding: 'utf8',
+                timeout: 2000,
+                maxBuffer: 1024 * 1024
+            });
+        } catch (execError) {
+            if (execError.status !== 1) {
+                throw execError;
+            }
+        }
+
+        delete pidsToProcess[parentPid];
+
+        const childPids = stdout.trim().split('\n').filter(Boolean);
+        
+        if (childPids.length === 0) {
+            if (Object.keys(pidsToProcess).length === 0) {
+                cb();
+            }
+            return;
+        }
+
+        childPids.forEach(function(pidStr) {
+            const pid = parseInt(pidStr, 10);
+            if (!isNaN(pid)) {
+                tree[parentPid].push(pid);
+                tree[pid] = [];
+                pidsToProcess[pid] = 1;
+                buildProcessTreeMacOS(pid, tree, pidsToProcess, cb);
+            }
+        });
+    } catch (err) {
+        delete pidsToProcess[parentPid];
+        if (Object.keys(pidsToProcess).length === 0) {
+            cb();
+        }
+    }
 }
